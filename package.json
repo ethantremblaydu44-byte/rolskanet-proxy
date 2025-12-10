@@ -12,6 +12,6 @@
     "puppeteer": "latest"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=16"
   }
 }
