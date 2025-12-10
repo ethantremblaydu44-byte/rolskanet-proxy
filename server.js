@@ -1,124 +1,101 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
-import * as cheerio from "cheerio";
+import puppeteer from "puppeteer";
 
 const app = express();
 
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// Fonction utilitaire pour simuler un vrai navigateur
-async function fetchHtml(url) {
-    console.log(`📡 Fetching: ${url}`);
-    const response = await fetch(url, {
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
-        }
+// Fonction magique qui lance un vrai navigateur
+async function scrapeWithBrowser(url, type) {
+    console.log(`🚀 Launching browser for: ${url}`);
+    
+    // Configuration spéciale pour que ça marche sur Render (mémoire limitée)
+    const browser = await puppeteer.launch({
+        headless: "new",
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--single-process",
+            "--no-zygote"
+        ]
     });
-    const text = await response.text();
-    console.log(`📦 Received ${text.length} characters`);
-    return text;
-}
 
-// ------------ SCRAPER FUNCTIONS ----------------
-
-async function scrapeCalendar() {
-    const url = "https://rolskanet.fr/sportif/synthese/rencontres/RH";
     try {
-        const html = await fetchHtml(url);
-        const $ = cheerio.load(html);
-        const matches = [];
-
-        // STRATÉGIE "LARGE" : On prend toutes les lignes de tous les tableaux
-        const rows = $("tr"); 
-        console.log(`🔍 Found ${rows.length} rows (tr) in HTML`);
-
-        rows.each((i, el) => {
-            const tds = $(el).find("td");
-            
-            // On cherche une ligne qui a au moins 3 colonnes (Date, Equipes, Score)
-            if (tds.length >= 3) {
-                const col1 = $(tds[0]).text().trim(); // Date ?
-                const col2 = $(tds[1]).text().trim(); // Equipes ?
-                const col3 = $(tds[2]).text().trim(); // Score ?
-
-                // Petit filtre pour éviter les en-têtes bizarres
-                // On garde si la colonne 1 ressemble à une date (contient un chiffre)
-                if (col1.match(/\d/) && col2.length > 3) {
-                    matches.push({ 
-                        date: col1, 
-                        teams: col2, 
-                        score: col3 
-                    });
-                }
-            }
-        });
-
-        console.log(`✅ Extracted ${matches.length} matches`);
-        return matches;
-    } catch (error) {
-        console.error("❌ Error scraping calendar:", error);
-        return [];
-    }
-}
-
-async function scrapeRanking() {
-    const url = "https://rolskanet.fr/sportif/synthese/classements/RH";
-    try {
-        const html = await fetchHtml(url);
-        const $ = cheerio.load(html);
-        const ranking = [];
-
-        // STRATÉGIE "LARGE"
-        const rows = $("tr");
+        const page = await browser.newPage();
         
-        rows.each((i, el) => {
-            const tds = $(el).find("td");
-            
-            // Un classement a souvent : Pos, Equipe, Pts, Joués, Diff (donc au moins 3 ou 4 colonnes)
-            if (tds.length >= 3) {
-                const pos = $(tds[0]).text().trim();
-                const team = $(tds[1]).text().trim();
-                const pts = $(tds[2]).text().trim();
-                
-                // Si la position est un chiffre, c'est probablement une ligne de classement
-                if (pos.match(/^\d+$/)) {
-                    ranking.push({ 
-                        position: pos, 
-                        team: team, 
-                        points: pts 
-                    });
-                }
-            }
-        });
+        // On se fait passer pour un utilisateur normal
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
+        
+        // On va sur la page et on attend que le réseau soit calme (page chargée)
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-        console.log(`✅ Extracted ${ranking.length} teams`);
-        return ranking;
+        // --- SCRAPING DIRECT DANS LA PAGE ---
+        const data = await page.evaluate((type) => {
+            const results = [];
+            
+            // On récupère toutes les lignes de tous les tableaux visibles
+            const rows = document.querySelectorAll("tr");
+            
+            rows.forEach(row => {
+                const tds = row.querySelectorAll("td");
+                
+                if (type === "calendar" && tds.length >= 3) {
+                    // Logique Calendrier
+                    const t1 = tds[0].innerText.trim();
+                    const t2 = tds[1].innerText.trim();
+                    const t3 = tds[2].innerText.trim();
+                    
+                    // Si la 1ere colonne contient un chiffre (date), on prend
+                    if (t1.match(/\d/) && t2.length > 3) {
+                        results.push({ date: t1, teams: t2, score: t3 });
+                    }
+                } 
+                else if (type === "ranking" && tds.length >= 3) {
+                    // Logique Classement
+                    const p = tds[0].innerText.trim();
+                    const t = tds[1].innerText.trim();
+                    const pts = tds[2].innerText.trim();
+                    
+                    // Si la position est un nombre
+                    if (p.match(/^\d+$/)) {
+                        results.push({ position: p, team: t, points: pts });
+                    }
+                }
+            });
+            return results;
+        }, type);
+
+        console.log(`✅ Found ${data.length} items`);
+        return data;
+
     } catch (error) {
-        console.error("❌ Error scraping ranking:", error);
+        console.error("❌ Browser Error:", error);
         return [];
+    } finally {
+        await browser.close();
     }
 }
 
 // ---------------- API ENDPOINTS ------------------
 
 app.get("/api/calendar", async (req, res) => {
-    const data = await scrapeCalendar();
+    // Note: Le lancement du navigateur prend quelques secondes
+    const data = await scrapeWithBrowser("https://rolskanet.fr/sportif/synthese/rencontres/RH", "calendar");
     res.json(data);
 });
 
 app.get("/api/ranking", async (req, res) => {
-    const data = await scrapeRanking();
+    const data = await scrapeWithBrowser("https://rolskanet.fr/sportif/synthese/classements/RH", "ranking");
     res.json(data);
 });
 
 // ---------------- SERVER --------------------------
 
 app.get("/", (req, res) => {
-    res.send("Rolskanet scraper V3 (Debug Mode) 🚀");
+    res.send("Rolskanet Scraper V4 (Puppeteer Edition) 🤖");
 });
 
 const port = process.env.PORT || 3000;
