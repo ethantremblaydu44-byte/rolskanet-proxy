@@ -3,9 +3,11 @@ import axios from "axios";
 import cheerio from "cheerio";
 import cron from "cron";
 import cors from "cors";
-app.use(cors());
+import fetch from "node-fetch";
 
 const app = express();
+app.use(cors());
+app.use(express.json());
 const PORT = process.env.PORT || 3000;
 
 // Cache (data stored in memory)
