@@ -5,120 +5,120 @@ import * as cheerio from "cheerio";
 
 const app = express();
 
-app.use(cors({
-    origin: "*",
-    methods: "GET",
-    allowedHeaders: "*"
-}));
-
+app.use(cors({ origin: "*" }));
 app.use(express.json());
 
-// Fonction pour faire un fetch avec une "fausse" identité de navigateur
+// Fonction utilitaire pour simuler un vrai navigateur
 async function fetchHtml(url) {
+    console.log(`📡 Fetching: ${url}`);
     const response = await fetch(url, {
         headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7"
         }
     });
-    return await response.text();
+    const text = await response.text();
+    console.log(`📦 Received ${text.length} characters`);
+    return text;
 }
 
 // ------------ SCRAPER FUNCTIONS ----------------
 
 async function scrapeCalendar() {
-    console.log("🔍 Scraping Calendar..."); // Log pour debug
     const url = "https://rolskanet.fr/sportif/synthese/rencontres/RH";
-    
     try {
         const html = await fetchHtml(url);
         const $ = cheerio.load(html);
         const matches = [];
 
-        $(".table tbody tr").each((i, el) => {
+        // STRATÉGIE "LARGE" : On prend toutes les lignes de tous les tableaux
+        const rows = $("tr"); 
+        console.log(`🔍 Found ${rows.length} rows (tr) in HTML`);
+
+        rows.each((i, el) => {
             const tds = $(el).find("td");
-            // Vérification que la ligne contient bien des données
-            if (tds.length > 0) {
-                const date = $(tds[0]).text().trim();
-                const teams = $(tds[1]).text().trim();
-                const score = $(tds[2]).text().trim();
-                matches.push({ date, teams, score });
+            
+            // On cherche une ligne qui a au moins 3 colonnes (Date, Equipes, Score)
+            if (tds.length >= 3) {
+                const col1 = $(tds[0]).text().trim(); // Date ?
+                const col2 = $(tds[1]).text().trim(); // Equipes ?
+                const col3 = $(tds[2]).text().trim(); // Score ?
+
+                // Petit filtre pour éviter les en-têtes bizarres
+                // On garde si la colonne 1 ressemble à une date (contient un chiffre)
+                if (col1.match(/\d/) && col2.length > 3) {
+                    matches.push({ 
+                        date: col1, 
+                        teams: col2, 
+                        score: col3 
+                    });
+                }
             }
         });
 
-        console.log(`✅ Calendar found: ${matches.length} matches`);
+        console.log(`✅ Extracted ${matches.length} matches`);
         return matches;
     } catch (error) {
         console.error("❌ Error scraping calendar:", error);
-        return []; // Retourne un tableau vide en cas d'erreur pour éviter le crash
+        return [];
     }
 }
 
 async function scrapeRanking() {
     const url = "https://rolskanet.fr/sportif/synthese/classements/RH";
-    const html = await fetchHtml(url);
-    const $ = cheerio.load(html);
+    try {
+        const html = await fetchHtml(url);
+        const $ = cheerio.load(html);
+        const ranking = [];
 
-    const ranking = [];
+        // STRATÉGIE "LARGE"
+        const rows = $("tr");
+        
+        rows.each((i, el) => {
+            const tds = $(el).find("td");
+            
+            // Un classement a souvent : Pos, Equipe, Pts, Joués, Diff (donc au moins 3 ou 4 colonnes)
+            if (tds.length >= 3) {
+                const pos = $(tds[0]).text().trim();
+                const team = $(tds[1]).text().trim();
+                const pts = $(tds[2]).text().trim();
+                
+                // Si la position est un chiffre, c'est probablement une ligne de classement
+                if (pos.match(/^\d+$/)) {
+                    ranking.push({ 
+                        position: pos, 
+                        team: team, 
+                        points: pts 
+                    });
+                }
+            }
+        });
 
-    $(".table tbody tr").each((i, el) => {
-        const tds = $(el).find("td");
-        if (tds.length > 0) {
-            const position = $(tds[0]).text().trim();
-            const team = $(tds[1]).text().trim();
-            const points = $(tds[2]).text().trim();
-            ranking.push({ position, team, points });
-        }
-    });
-
-    return ranking;
-}
-
-async function findNextMatch() {
-    const calendar = await scrapeCalendar();
-    
-    // Sécurité : si calendar est vide ou undefined, on renvoie null
-    if (!calendar || calendar.length === 0) return null;
-
-    // find the first game where score is empty OR indicates a future match
-    return calendar.find(m => m.score === "" || m.score === "-") || null;
+        console.log(`✅ Extracted ${ranking.length} teams`);
+        return ranking;
+    } catch (error) {
+        console.error("❌ Error scraping ranking:", error);
+        return [];
+    }
 }
 
 // ---------------- API ENDPOINTS ------------------
 
 app.get("/api/calendar", async (req, res) => {
-    try {
-        const data = await scrapeCalendar();
-        res.json(data);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Calendar scraping failed" });
-    }
+    const data = await scrapeCalendar();
+    res.json(data);
 });
 
 app.get("/api/ranking", async (req, res) => {
-    try {
-        const data = await scrapeRanking();
-        res.json(data);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Ranking scraping failed" });
-    }
-});
-
-app.get("/api/next-match", async (req, res) => {
-    try {
-        const data = await findNextMatch();
-        res.json(data);
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Next match scraping failed" });
-    }
+    const data = await scrapeRanking();
+    res.json(data);
 });
 
 // ---------------- SERVER --------------------------
 
 app.get("/", (req, res) => {
-    res.send("Rolskanet scraper running 🚀");
+    res.send("Rolskanet scraper V3 (Debug Mode) 🚀");
 });
 
 const port = process.env.PORT || 3000;
