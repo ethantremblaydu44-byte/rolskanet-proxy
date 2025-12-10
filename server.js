@@ -1,94 +1,105 @@
 import express from "express";
-import axios from "axios";
-import cheerio from "cheerio";
-import cron from "cron";
 import cors from "cors";
 import fetch from "node-fetch";
+import * as cheerio from "cheerio";
 
 const app = express();
-app.use(cors());
+
+// ---- ENABLE CORS FOR EVERYTHING ----
+app.use(cors({
+    origin: "*",
+    methods: "GET",
+    allowedHeaders: "*"
+}));
+
 app.use(express.json());
-const PORT = process.env.PORT || 3000;
 
-// Cache (data stored in memory)
-let cache = {
-  calendar: null,
-  ranking: null,
-  lastUpdate: null
-};
+// ------------ SCRAPER FUNCTIONS ----------------
 
-// --- Scraping Function ---
-async function scrapeRolskanet() {
-  try {
-    console.log("⏳ Fetching Rolskanet data...");
+async function scrapeCalendar() {
+    const url = "https://rolskanet.fr/sportif/synthese/rencontres/RH";
+    const html = await fetch(url).then(res => res.text());
+    const $ = cheerio.load(html);
 
-    const calendarURL = "https://rolskanet.fr/sportif/synthese/rencontres/RH";
-    const rankingURL = "https://rolskanet.fr/sportif/synthese/classements/RH";
-
-    const calendarHTML = (await axios.get(calendarURL)).data;
-    const rankingHTML = (await axios.get(rankingURL)).data;
-
-    const $cal = cheerio.load(calendarHTML);
-    const $rank = cheerio.load(rankingHTML);
-
-    // Extract **ALL MATCHES**
     const matches = [];
-    $cal("table tbody tr").each((i, row) => {
-      const cols = $cal(row).find("td").map((i, el) => $cal(el).text().trim()).get();
-      matches.push({
-        date: cols[0],
-        home: cols[1],
-        away: cols[2],
-        score: cols[3]
-      });
+
+    $(".table tbody tr").each((i, el) => {
+        const tds = $(el).find("td");
+        const date = $(tds[0]).text().trim();
+        const teams = $(tds[1]).text().trim();
+        const score = $(tds[2]).text().trim();
+
+        matches.push({ date, teams, score });
     });
 
-    // Extract **RANKING**
-    const ranking = [];
-    $rank("table tbody tr").each((i, row) => {
-      const cols = $rank(row).find("td").map((i, el) => $rank(el).text().trim()).get();
-      ranking.push({
-        pos: cols[0],
-        team: cols[1],
-        points: cols[2],
-        played: cols[3]
-      });
-    });
-
-    cache = {
-      calendar: matches,
-      ranking,
-      lastUpdate: new Date().toISOString()
-    };
-
-    console.log("✅ Rolskanet data updated!");
-  } catch (err) {
-    console.error("❌ Scraping error:", err.message);
-  }
+    return matches;
 }
 
-// Run once at startup
-await scrapeRolskanet();
+async function scrapeRanking() {
+    const url = "https://rolskanet.fr/sportif/synthese/classements/RH";
+    const html = await fetch(url).then(res => res.text());
+    const $ = cheerio.load(html);
 
-// Update every 30 minutes
-new cron.CronJob("*/30 * * * *", scrapeRolskanet).start();
+    const ranking = [];
 
-// --- API ROUTES ---
-app.get("/api/calendar", (req, res) => {
-  res.json({
-    updated: cache.lastUpdate,
-    calendar: cache.calendar
-  });
+    $(".table tbody tr").each((i, el) => {
+        const tds = $(el).find("td");
+        const position = $(tds[0]).text().trim();
+        const team = $(tds[1]).text().trim();
+        const points = $(tds[2]).text().trim();
+
+        ranking.push({ position, team, points });
+    });
+
+    return ranking;
+}
+
+async function findNextMatch() {
+    const calendar = await scrapeCalendar();
+
+    // find the first game where score is empty
+    return calendar.find(m => m.score === "" || m.score === "-") || null;
+}
+
+// ---------------- API ENDPOINTS ------------------
+
+app.get("/api/calendar", async (req, res) => {
+    try {
+        const data = await scrapeCalendar();
+        res.json(data);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Calendar scraping failed" });
+    }
 });
 
-app.get("/api/ranking", (req, res) => {
-  res.json({
-    updated: cache.lastUpdate,
-    ranking: cache.ranking
-  });
+app.get("/api/ranking", async (req, res) => {
+    try {
+        const data = await scrapeRanking();
+        res.json(data);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Ranking scraping failed" });
+    }
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port " + PORT);
+app.get("/api/next-match", async (req, res) => {
+    try {
+        const data = await findNextMatch();
+        res.json(data);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Next match scraping failed" });
+    }
+});
+
+// ---------------- SERVER --------------------------
+
+app.get("/", (req, res) => {
+    res.send("Rolskanet scraper running 🚀");
+});
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+    console.log("Server running on port " + port);
 });
