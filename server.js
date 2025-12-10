@@ -2,6 +2,8 @@ import express from "express";
 import axios from "axios";
 import cheerio from "cheerio";
 import cron from "cron";
+import cors from "cors";
+app.use(cors());
 
 const app = express();
 const PORT = process.env.PORT || 3000;
