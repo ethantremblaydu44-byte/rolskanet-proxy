@@ -5,7 +5,6 @@ import * as cheerio from "cheerio";
 
 const app = express();
 
-// ---- ENABLE CORS FOR EVERYTHING ----
 app.use(cors({
     origin: "*",
     methods: "GET",
@@ -14,41 +13,61 @@ app.use(cors({
 
 app.use(express.json());
 
+// Fonction pour faire un fetch avec une "fausse" identité de navigateur
+async function fetchHtml(url) {
+    const response = await fetch(url, {
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        }
+    });
+    return await response.text();
+}
+
 // ------------ SCRAPER FUNCTIONS ----------------
 
 async function scrapeCalendar() {
+    console.log("🔍 Scraping Calendar..."); // Log pour debug
     const url = "https://rolskanet.fr/sportif/synthese/rencontres/RH";
-    const html = await fetch(url).then(res => res.text());
-    const $ = cheerio.load(html);
+    
+    try {
+        const html = await fetchHtml(url);
+        const $ = cheerio.load(html);
+        const matches = [];
 
-    const matches = [];
+        $(".table tbody tr").each((i, el) => {
+            const tds = $(el).find("td");
+            // Vérification que la ligne contient bien des données
+            if (tds.length > 0) {
+                const date = $(tds[0]).text().trim();
+                const teams = $(tds[1]).text().trim();
+                const score = $(tds[2]).text().trim();
+                matches.push({ date, teams, score });
+            }
+        });
 
-    $(".table tbody tr").each((i, el) => {
-        const tds = $(el).find("td");
-        const date = $(tds[0]).text().trim();
-        const teams = $(tds[1]).text().trim();
-        const score = $(tds[2]).text().trim();
-
-        matches.push({ date, teams, score });
-    });
-
-    return matches;
+        console.log(`✅ Calendar found: ${matches.length} matches`);
+        return matches;
+    } catch (error) {
+        console.error("❌ Error scraping calendar:", error);
+        return []; // Retourne un tableau vide en cas d'erreur pour éviter le crash
+    }
 }
 
 async function scrapeRanking() {
     const url = "https://rolskanet.fr/sportif/synthese/classements/RH";
-    const html = await fetch(url).then(res => res.text());
+    const html = await fetchHtml(url);
     const $ = cheerio.load(html);
 
     const ranking = [];
 
     $(".table tbody tr").each((i, el) => {
         const tds = $(el).find("td");
-        const position = $(tds[0]).text().trim();
-        const team = $(tds[1]).text().trim();
-        const points = $(tds[2]).text().trim();
-
-        ranking.push({ position, team, points });
+        if (tds.length > 0) {
+            const position = $(tds[0]).text().trim();
+            const team = $(tds[1]).text().trim();
+            const points = $(tds[2]).text().trim();
+            ranking.push({ position, team, points });
+        }
     });
 
     return ranking;
@@ -56,8 +75,11 @@ async function scrapeRanking() {
 
 async function findNextMatch() {
     const calendar = await scrapeCalendar();
+    
+    // Sécurité : si calendar est vide ou undefined, on renvoie null
+    if (!calendar || calendar.length === 0) return null;
 
-    // find the first game where score is empty
+    // find the first game where score is empty OR indicates a future match
     return calendar.find(m => m.score === "" || m.score === "-") || null;
 }
 
