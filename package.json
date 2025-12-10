@@ -1,0 +1,15 @@
+{
+  "name": "rolskanet-proxy",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "latest",
+    "cheerio": "latest",
+    "express": "latest",
+    "cron": "latest"
+  }
+}
